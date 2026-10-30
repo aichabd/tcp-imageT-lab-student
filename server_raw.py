@@ -2,74 +2,111 @@ import socket
 import struct
 import time
 import cv2
+import numpy as np           
 
+SERVER_IP = '127.0.0.1'
 PORT = 8080
-HEADER_SIZE = 8  # 2 bytes height + 2 bytes width + 4 bytes payload length
+IMAGE_PATH = 'test_image.png'   
+mode = 'raw'                    
 
 
+def generate_test_image(IMAGE_PATH, width, height):
+    # 1. Create a blank dark-gray canvas (BGR format)
+    image = np.full((height, width, 3), 40, dtype=np.uint8)
 
-def recv_exact(sock, n):
-    """TODO 4: Implement a robust helper that reads exactly n bytes from a TCP stream.
+    # 2. Add a diagonal color gradient across the background
+    for y in range(height):
+        for x in range(width):
+            image[y, x, 0] = int((x / width) * 255)      
+            image[y, x, 1] = int((y / height) * 255)     
+
+    # 3. Draw geometric shapes
+    # Red circle in the center
+    center_coordinates = (width // 2, height // 2)
+    cv2.circle(image, center_coordinates, 80, (0, 0, 255), -1)
+
+    # Yellow rectangle
+    cv2.rectangle(image, (50, 50), (200, 150), (0, 255, 255), 3)
+
+    # Green line
+    cv2.line(image, (50, height - 50), (width - 50, height - 50), (0, 255, 0), 4)
+
+    # 4. Add text overlay
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    cv2.putText(image, 'TCP IMAGE TEST', (width // 2 - 140, 60), font, 1.0, (255, 255, 255), 2)
+    cv2.putText(image, f'{width}x{height} px', (width // 2 - 60, height // 2 + 120), font, 0.7, (255, 255, 255), 1)
+
+    # 5. Save the image file
+    cv2.imwrite(IMAGE_PATH, image)    # تصحيح: filename -> IMAGE_PATH
+    print(f"Test image successfully generated and saved as '{IMAGE_PATH}' ({width}x{height} pixels).")
+
+
+def send_pixel_by_pixel(sock, header, img):
+    """Send the header, then every pixel in its own sendall() call.
+
+    Pixels are sent row by row (top to bottom, left to right).
+    Each pixel is `channels` bytes (BGR order for a colour image, as read by OpenCV).
     """
-    raise NotImplementedError("TODO 4: Implement recv_exact")
+    height, width, _ = img.shape      
+    sock.sendall(header)
+    calls = 1
+    for y in range(height):
+        for x in range(width):
+            sock.sendall(img[y, x].tobytes())
+            calls += 1
+    return calls
 
 
-def run_server():
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_socket.bind(('0.0.0.0', PORT))
-    server_socket.listen(1)
+def run_client():
 
-    print(f"Server listening on port {PORT}...")
-    conn, addr = server_socket.accept()
-    print(f"Connection established with {addr}")
+    # TODO 1: Prepare the generated test image
+    generate_test_image(IMAGE_PATH, 320, 240)          
+
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    # Disable Nagle's algorithm so that small sends are not merged
+    # by TCP into larger segments (true pixel-by-pixel transmission).
+    client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+    client_socket.connect((SERVER_IP, PORT))
+    print(f"Connected to server at {SERVER_IP}:{PORT} (mode: {mode})")
+
+    img = cv2.imread(IMAGE_PATH)
+    if img is None:
+        print(f"Error: {IMAGE_PATH} not found.")
+        client_socket.close()
+        return
+
+    # TODO 2: specifying height, width and channels from image shape
+    height, width, channels = img.shape               
+
+    payload = img.tobytes()
+    payload_length = len(payload)
 
     try:
-        # Wait for the first byte without consuming it, so the timer measures
-        # the transfer itself and not the time the client spends preparing the image.
-        if not conn.recv(1, socket.MSG_PEEK):
-            print("Client closed the connection without sending data.")
-            return
         start_time = time.time()
 
-        # TODO 5: Read the exact header bytes using recv_exact (HEADER_SIZE bytes).
-        # Stop with an error message if the connection closed before the full header arrived.
-        raise NotImplementedError("TODO 5: Read the header")
+        # TODO 3: Construct fixed-size header specifying height (2 bytes), width (2 bytes) and payload length (4 bytes) using struct.pack()
+        header = struct.pack('!HHI', height, width, payload_length)   
 
-        # TODO 6: Unpack the header fields using struct.unpack()
-        raise NotImplementedError("TODO 6: Unpack the header")
+        # TODO 4: Transmit header and raw pixel data
+        if mode == 'raw':                             
+            client_socket.sendall(header + payload)
+            calls = 1
+        else:
+            calls = send_pixel_by_pixel(client_socket, header, img)
 
-        print(f"Header received: {width}x{height}, payload = {payload_length} bytes")
+        elapsed = time.time() - start_time             
+        throughput = (payload_length / (1024 * 1024)) / elapsed   
 
-        pixels = height * width
-        if pixels == 0 or payload_length % pixels != 0:
-            print("Error: payload length does not match the image dimensions.")
-            return
-       
-
-        # TODO 7: Read the exact payload bytes (payload_length) using recv_exact.
-        # Stop with an error message if the connection closed before the full image arrived.
-        raise NotImplementedError("TODO 7: Read the payload")
-
-        # TODO 8: Reconstruct the raw numpy array and reshape it to (height, width, channels).
-     
-        raise NotImplementedError("TODO 8: Reconstruct the raw pixel array")
-        
-        # TODO 9: Calculate and log network performance metrics (Latency, Packet loss, Throughput KB/s)
-        
-        raise NotImplementedError("TODO 9: Calculate network performance metrics")
- 
-        print(f"Raw Transfer Complete | Size: {HEADER_SIZE + payload_length} bytes")
-        print(f"Metrics | Latency: {latency_ms:.3f} ms | Packet loss: {packet_loss:.2f} % | "
-              f"Throughput: {throughput_kbps:.2f} KB/s")
-        
-
-             
+        print(f"Sent raw image {width}x{height}x{channels} "
+              f"({payload_length} bytes) in {elapsed:.4f} seconds "
+              f"using {calls} send call(s) ({throughput:.2f} MB/s).")
 
     finally:
-        conn.close()
-        server_socket.close()
+        client_socket.close()
 
 
 if __name__ == '__main__':
-    run_server()
+
+    run_client()

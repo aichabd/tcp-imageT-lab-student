@@ -12,7 +12,7 @@ HEADER_SIZE = 8  # 2 bytes height + 2 bytes width + 4 bytes payload length
 def recv_exact(sock, n):
     """TODO 4: Implement a robust helper that reads exactly n bytes from a TCP stream.
     """
-    # حل TODO 4 (وحذفت raise NotImplementedError)
+    
     data = bytearray()
     while len(data) < n:
         chunk = sock.recv(n - len(data))   
